@@ -1,0 +1,29 @@
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro' #Для России зеркало
+
+Vagrant.configure(2) do |config|
+  config.vm.box = "ubuntu/22.04"
+  config.vm.box_check_update = false
+
+  # Машина nginx - получает IP static
+  config.vm.define "nginx" do |subconfig|
+    subconfig.vm.provider "virtualbox" do |vb|
+      vb.name = "nginx" # исправлено с "nginx" для единообразия
+    end
+    subconfig.vm.hostname = "nginx-server"
+    subconfig.vm.network "private_network", ip: "192.168.10.11"
+  end
+
+  # Машина ansible - статический IP
+  config.vm.define "ansible" do |subconfig|
+    subconfig.vm.provider "virtualbox" do |vb|
+      vb.name = "ansible"
+    end
+    subconfig.vm.hostname = "ansible"
+    subconfig.vm.network "private_network", ip: "192.168.10.12"
+    subconfig.vm.provision "shell", inline: <<-SHELL
+    sudo apt update && sudo apt upgrade -y
+    sudo apt install ansible -y 
+    sudo reboot
+   SHELL
+  end
+end
