@@ -1,0 +1,38 @@
+# -*- mode: ruby -*-
+# vim: set ft=ruby :
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro'
+MACHINES = {
+  :lvm => {
+        :box_name => "ubuntu/22.04",
+        :vm_name => "lvm",
+  }
+}
+
+Vagrant.configure("2") do |config|
+
+  MACHINES.each do |boxname, boxconfig|
+
+    config.vm.define boxname do |box|
+   
+      box.vm.box = boxconfig[:box_name]
+      box.vm.host_name = boxconfig[:vm_name]
+      
+      box.vm.provider "virtualbox" do |v|
+        v.memory = 1024
+        v.cpus = 2
+        v.customize ['createhd', '--filename', 'sdc.vdi', '--size', 1024]
+        v.customize ['createhd', '--filename', 'sde.vdi', '--size', 1024]
+        v.customize ['createhd', '--filename', 'sdd.vdi', '--size', 1024]
+        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 3, '--device', 0, '--type', 'hdd', '--medium', 'sdc.vdi']
+        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 4, '--device', 0, '--type', 'hdd', '--medium', 'sde.vdi']
+        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 5, '--device', 0, '--type', 'hdd', '--medium', 'sdd.vdi']
+
+       end
+
+      box.vm.provision "shell", privileged: true, inline: <<-SHELL
+
+
+      SHELL
+    end
+  end
+end

@@ -1,0 +1,61 @@
+# -*- mode: ruby -*-
+# vim: set ft=ruby :
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro'
+MACHINES = {
+  :mdadm => {
+        :box_name => "ubuntu/22.04",
+        :vm_name => "mdadm",
+  }
+}
+
+Vagrant.configure("2") do |config|
+
+  MACHINES.each do |boxname, boxconfig|
+
+    config.vm.define boxname do |box|
+   
+      box.vm.box = boxconfig[:box_name]
+      box.vm.host_name = boxconfig[:vm_name]
+      
+      box.vm.provider "virtualbox" do |v|
+        v.memory = 1024
+        v.cpus = 2
+        v.customize ['createhd', '--filename', 'sdc.vdi', '--size', 1024]
+        v.customize ['createhd', '--filename', 'sde.vdi', '--size', 1024]
+        v.customize ['createhd', '--filename', 'sdd.vdi', '--size', 1024]
+        v.customize ['createhd', '--filename', 'sdf.vdi', '--size', 1024]
+        v.customize ['createhd', '--filename', 'sdg.vdi', '--size', 1024]
+        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 2, '--device', 0, '--type', 'hdd', '--medium', 'sdc.vdi']
+        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 3, '--device', 0, '--type', 'hdd', '--medium', 'sde.vdi']
+        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 4, '--device', 0, '--type', 'hdd', '--medium', 'sdd.vdi']
+        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 5, '--device', 0, '--type', 'hdd', '--medium', 'sdf.vdi']
+        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 6, '--device', 0, '--type', 'hdd', '--medium', 'sdg.vdi']
+
+       end
+
+      box.vm.provision "shell", privileged: true, inline: <<-SHELL
+      mkdir /opt/raid10
+      mdadm --create /dev/md10 -l 10 -n 4 /dev/sd{c,d,e,f}
+      mdadm --detail --scan >> /etc/mdadm/mdadm.conf
+      mdadm --manage /dev/md10 --fail /dev/sdd
+      mdadm --manage /dev/md10 --remove /dev/sdd
+      mdadm --manage /dev/md10 --add /dev/sdd
+      echo "/dev/md10 /opt/raid10 ext4 defaults,nofail 0 0" >> /etc/fstab
+      mkfs.ext4 /dev/md10
+      parted -s /dev/sdg mklabel gpt
+      parted  /dev/sdg mkpart primary ext4 0% 20%
+      parted  /dev/sdg mkpart primary ext4 20% 40%
+      parted  /dev/sdg mkpart primary ext4 40% 60%
+      parted  /dev/sdg mkpart primary ext4 60% 80%
+      parted  /dev/sdg mkpart primary ext4 80% 100%
+      for i in 1 2 3 4 5; do
+        mkfs.ext4 -F /dev/sdg${i}
+        mkdir /opt/partition${i}
+        echo "/dev/sdg${i} /opt/partition${i} ext4 defaults,nofail 0 0" >> /etc/fstab
+      done
+      update-initramfs -u
+      reboot
+      SHELL
+    end
+  end
+end
