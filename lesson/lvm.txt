@@ -1,0 +1,50 @@
+#1 задание
+vgcreate vg_root /dev/sdb
+lvcreate vg_root -n lv_root -l 100%FREE /dev/sdb
+mkfs.ext4 /dev/mapper/vg_root-lv_root
+mount /dev/mapper/vg_root-lv_root /mnt/
+rsync -avxHAX --progress / /mnt/
+for i in /proc/ /sys/ /dev/ /run/ /boot/; do mount --bind $i /mnt/$i; done
+chroot /mnt/
+grub-mkconfig -o /boot/grub/grub.cfg
+update-initramfs -u
+exit
+umount /mnt/proc /mnt/sys /mnt/dev /mnt/run /mnt/boot
+reboot
+lvremove /dev/mapper/ubuntu--vg-ubuntu--lv
+lvcreate -n ubuntu-lv -L 8G /dev/ubuntu-vg
+mkfs.ext4 /dev/ubuntu-vg/ubuntu-lv
+mount /dev/ubuntu-vg/ubuntu-lv /mnt
+rsync -avxHAX --progress / /mnt/
+for i in /proc/ /sys/ /dev/ /run/ /boot/; do mount --bind $i /mnt/$i; done
+chroot /mnt/
+grub-mkconfig -o /boot/grub/grub.cfg
+update-initramfs -u
+exit
+umount /mnt/proc /mnt/sys /mnt/dev /mnt/run /mnt/boot
+reboot
+#2е задание тут скопом сразу делаю 
+vgremove vg_root
+vgcreate storage /dev/sdb
+pvcreate dev/sdc
+pvcreate dev/sdd
+pvcreate dev/sde
+vgextend storage /dev/sdc /dev/sdd /dev/sde
+lvcreate storage -n home -l 100%FREE /dev/sdb #том для снапшотов
+mkfs.ext4 /dev/mapper/storage-home
+mkdir /mnt/home
+mount /dev/mapper/storage-home /mnt/home/
+echo "home" | tee /mnt/home/text.txt
+lvcreate -s /dev/mapper/storage-home -n s_01  -L 100M
+rm -r /mnt/home/text.txt
+umount /mnt/home/
+lvconvert --merge /dev/mapper/storage-s_01
+mount /dev/mapper/storage-home /mnt/home/
+echo "/dev/mapper/storage-home /mnt/home/ ext4 defaults,nofail 0 0" >> /etc/fstab
+lvcreate storage -n var -L 300M /dev/sdc #том для миррора 
+mkfs.ext4 /dev/mapper/storage-var
+mkdir /mnt/var
+mount /dev/mapper/storage-var /mnt/var/
+echo "var" | tee /mnt/var/text.txt
+echo  "/dev/mapper/storage-var /mnt/var/ ext4 defaults,nofail 0 0" >> /etc/fstab
+lvconvert -m 1 /dev/mapper/storage-var /dev/sdd

@@ -1,38 +1,128 @@
 # -*- mode: ruby -*-
 # vim: set ft=ruby :
+#
+# ВАЖНО: перед первым "vagrant up" один раз запустить create-disks.ps1
+# из этой же папки — он создаст .vdi файлы. Сам Vagrantfile их только
+# ПОДКЛЮЧАЕТ (storageattach), не создаёт — так vagrant-reload работает
+# стабильно (баг createhd+reload описан в issues/6 проекта vagrant-reload).
+
 ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro'
+
 MACHINES = {
   :lvm => {
-        :box_name => "ubuntu/22.04",
-        :vm_name => "lvm",
+    :box_name => "bento/ubuntu-24.04",
+    :vm_name  => "lvm",
   }
 }
 
+# имя файла => (не используется для размера здесь, размер уже задан в create-disks.ps1)
+DISKS = ['sdb.vdi', 'sdc.vdi', 'sdd.vdi', 'sde.vdi', 'sdf.vdi']
+
 Vagrant.configure("2") do |config|
+  config.vagrant.plugins = "vagrant-reload"
 
   MACHINES.each do |boxname, boxconfig|
-
     config.vm.define boxname do |box|
-   
       box.vm.box = boxconfig[:box_name]
       box.vm.host_name = boxconfig[:vm_name]
-      
+      box.vm.boot_timeout = 600
+
       box.vm.provider "virtualbox" do |v|
         v.memory = 1024
         v.cpus = 2
-        v.customize ['createhd', '--filename', 'sdc.vdi', '--size', 1024]
-        v.customize ['createhd', '--filename', 'sde.vdi', '--size', 1024]
-        v.customize ['createhd', '--filename', 'sdd.vdi', '--size', 1024]
-        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 3, '--device', 0, '--type', 'hdd', '--medium', 'sdc.vdi']
-        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 4, '--device', 0, '--type', 'hdd', '--medium', 'sde.vdi']
-        v.customize ['storageattach', :id, '--storagectl', 'SCSI', '--port', 5, '--device', 0, '--type', 'hdd', '--medium', 'sdd.vdi']
 
-       end
+        port = 2
+        DISKS.each do |filename|
+          full_path = File.join(File.dirname(__FILE__), filename)
+          # ТОЛЬКО storageattach. НИКАКОГО createhd здесь —
+          # диски уже созданы заранее скриптом create-disks.ps1.
+          # storageattach безопасно повторяется при каждом reload.
+          v.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', port, '--device', 0, '--type', 'hdd', '--medium', full_path]
+          port += 1
+        end
+      end
 
-      box.vm.provision "shell", privileged: true, inline: <<-SHELL
-
-
+      # === ЭТАП 1: переезд root на временный диск (sdb) ===
+      box.vm.provision "shell", name: "stage1-move-to-tmp", inline: <<-SHELL
+        set -e
+        if ! vgs vg_root >/dev/null 2>&1; then
+          vgcreate vg_root /dev/sdb
+          lvcreate -n lv_root -l 100%FREE vg_root
+          mkfs.ext4 -F /dev/mapper/vg_root-lv_root
+          mount /dev/mapper/vg_root-lv_root /mnt
+          rsync -axHAX / /mnt/
+          for i in proc sys dev run boot; do mount --bind /$i /mnt/$i; done
+          chroot /mnt /bin/bash -c "grub-mkconfig -o /boot/grub/grub.cfg && update-initramfs -u"
+          for i in proc sys dev run boot; do umount /mnt/$i; done
+        else
+          echo "stage1 already done, skipping"
+        fi
       SHELL
+
+      box.vm.provision :reload
+
+      # === ЭТАП 2: пересоздание ubuntu-vg на 8G, переезд обратно ===
+      box.vm.provision "shell", name: "stage2-shrink-root", inline: <<-SHELL
+        set -e
+        CURRENT_ROOT=$(findmnt -n -o SOURCE /)
+        if echo "$CURRENT_ROOT" | grep -q vg_root; then
+          yes | lvremove /dev/ubuntu-vg/ubuntu-lv || true
+          lvcreate -n ubuntu-lv -L 8G -y /dev/ubuntu-vg
+          mkfs.ext4 -F /dev/ubuntu-vg/ubuntu-lv
+          mount /dev/ubuntu-vg/ubuntu-lv /mnt
+          rsync -axHAX / /mnt/
+          for i in proc sys dev run boot; do mount --bind /$i /mnt/$i; done
+          chroot /mnt /bin/bash -c "grub-mkconfig -o /boot/grub/grub.cfg && update-initramfs -u"
+          for i in proc sys dev run boot; do umount /mnt/$i; done
+        else
+          echo "stage2 already done (root is not on vg_root), skipping"
+        fi
+      SHELL
+
+      box.vm.provision :reload
+
+      # === ЭТАП 3: очистка временного VG + задание 2 (home/var/mirror) ===
+      box.vm.provision "shell", name: "stage3-cleanup-and-task2", inline: <<-SHELL
+        set -e
+        vgremove -f vg_root || true
+        pvremove -f /dev/sdb || true
+
+        # На всякий случай стираем старые сигнатуры файловых систем на
+        # дисках, которые раньше уже использовались (sdb был под vg_root/ext4) —
+        # без этого lvcreate ниже уйдёт в интерактивный запрос "Wipe it? [y/n]"
+        # и упадёт в неинтерактивном provisioning.
+        wipefs -a /dev/sdb || true
+        wipefs -a /dev/sdc || true
+        wipefs -a /dev/sdd || true
+        wipefs -a /dev/sde || true
+
+        if ! vgs storage >/dev/null 2>&1; then
+          vgcreate storage /dev/sdb
+          pvcreate /dev/sdc /dev/sdd /dev/sde
+          vgextend storage /dev/sdc /dev/sdd /dev/sde
+        fi
+
+        if ! lvs storage/home >/dev/null 2>&1; then
+          lvcreate -y -n home -l 100%FREE storage /dev/sdb
+          mkfs.ext4 -F /dev/mapper/storage-home
+          mkdir -p /mnt/home
+          mount /dev/mapper/storage-home /mnt/home
+          echo "home" | tee /mnt/home/text.txt
+          grep -q storage-home /etc/fstab || echo "/dev/mapper/storage-home /mnt/home ext4 defaults,nofail 0 0" >> /etc/fstab
+        fi
+
+        if ! lvs storage/var >/dev/null 2>&1; then
+          lvcreate -y -n var -L 300M storage /dev/sdc
+          mkfs.ext4 -F /dev/mapper/storage-var
+          mkdir -p /mnt/var
+          mount /dev/mapper/storage-var /mnt/var
+          echo "var" | tee /mnt/var/text.txt
+          grep -q storage-var /etc/fstab || echo "/dev/mapper/storage-var /mnt/var ext4 defaults,nofail 0 0" >> /etc/fstab
+
+          yes | lvconvert -m 1 /dev/mapper/storage-var /dev/sdd
+        fi
+      SHELL
+
     end
   end
 end
