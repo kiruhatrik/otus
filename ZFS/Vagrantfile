@@ -25,15 +25,54 @@ Vagrant.configure("2") do |config|
         v.customize ['createhd', '--filename', 'sdd.vdi', '--size', 1024]
         v.customize ['createhd', '--filename', 'sde.vdi', '--size', 1024]
         v.customize ['createhd', '--filename', 'sdf.vdi', '--size', 1024]
+        v.customize ['createhd', '--filename', 'sdg.vdi', '--size', 1024]
+        v.customize ['createhd', '--filename', 'sdh.vdi', '--size', 1024]
+        v.customize ['createhd', '--filename', 'sdi.vdi', '--size', 1024]
         v.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 2, '--device', 0, '--type', 'hdd', '--medium', 'sdb.vdi']
         v.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 3, '--device', 0, '--type', 'hdd', '--medium', 'sdc.vdi']
         v.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 4, '--device', 0, '--type', 'hdd', '--medium', 'sdd.vdi']
         v.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 5, '--device', 0, '--type', 'hdd', '--medium', 'sde.vdi']
         v.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 6, '--device', 0, '--type', 'hdd', '--medium', 'sdf.vdi']
-
+        v.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 7, '--device', 0, '--type', 'hdd', '--medium', 'sdg.vdi']
+        v.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 8, '--device', 0, '--type', 'hdd', '--medium', 'sdh.vdi']
+        v.customize ['storageattach', :id, '--storagectl', 'SATA Controller', '--port', 9, '--device', 0, '--type', 'hdd', '--medium', 'sdi.vdi']
        end
 
       box.vm.provision "shell", privileged: true, inline: <<-SHELL
+        apt update
+        apt install -y zfsutils-linux
+
+        zpool create storage1 mirror /dev/sdb /dev/sdc
+        zpool create storage2 mirror /dev/sdd /dev/sde
+        zpool create storage3 mirror /dev/sdf /dev/sdg
+        zpool create storage4 mirror /dev/sdh /dev/sdi
+
+        zfs create -o compression=gzip storage1/otus1
+        zfs create -o compression=zle   storage2/otus2
+        zfs create -o compression=lzjb  storage3/otus3
+        zfs create -o compression=lz4   storage4/otus4
+
+        for i in 1 2 3 4; do
+          wget -P /storage$i/otus$i https://gutenberg.org/cache/epub/2600/pg2600.converter.log
+        done
+
+        zfs get compression,compressratio storage1/otus1 storage2/otus2 storage3/otus3 storage4/otus4
+
+        cd /root
+        wget -O archive.tar.gz --no-check-certificate 'https://drive.usercontent.google.com/download?id=1MvrcEp-WgAQe57aDEzxSRalPAwbNN1Bb&export=download'
+        tar -xzvf archive.tar.gz
+        zpool import -d zpoolexport/ otus newotus
+
+        zfs get checksum newotus
+        zfs list newotus
+        zpool status newotus
+        zfs get recordsize newotus
+        zfs get compression newotus
+
+        wget -O otus_task2.file --no-check-certificate 'https://drive.usercontent.google.com/download?id=1wgxjih8YZ-cqLqaZVa0lA3h3Y029c3oI&export=download'
+        zfs receive newotus/test@today < otus_task2.file
+
+        find /newotus/test -name "secret_message" -exec cat {} \\;
       SHELL
     end
   end
