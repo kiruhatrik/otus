@@ -1,0 +1,54 @@
+# -*- mode: ruby -*-
+# vim: set ft=ruby :
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro'
+MACHINES = {
+  :packages => {
+        :box_name => "almalinux/9",
+        :vm_name => "packages",
+  }
+}
+Vagrant.configure("2") do |config|
+  MACHINES.each do |boxname, boxconfig|
+    config.vm.define boxname do |box|
+
+      box.vm.box = boxconfig[:box_name]
+      box.vm.host_name = boxconfig[:vm_name]
+
+      box.vm.provider "virtualbox" do |v|
+        v.memory = 2048
+        v.cpus = 2
+        v.name = boxconfig[:vm_name]
+       end
+
+      box.vm.provision "shell", privileged: true, inline: <<-SHELL
+      yum install -y wget rpmdevtools rpm-build createrepo yum-utils cmake gcc git nano
+      mkdir rpm && cd rpm
+      yumdownloader --source nginx
+      rpm -Uvh nginx*.src.rpm
+      yum-builddep -y nginx
+      cd /root
+      git clone --recurse-submodules -j8 https://github.com/google/ngx_brotli
+      cd ngx_brotli/deps/brotli
+      mkdir out && cd out
+      cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF -DCMAKE_C_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_CXX_FLAGS="-Ofast -m64 -march=native -mtune=native -flto -funroll-loops -ffunction-sections -fdata-sections -Wl,--gc-sections" -DCMAKE_INSTALL_PREFIX=./installed ..
+      cmake --build . --config Release -j 2 --target brotlienc
+      cd /root
+      sed -i '/--with-debug \\/a\    --add-module=/root/ngx_brotli \\' ~/rpmbuild/SPECS/nginx.spec
+      cd ~/rpmbuild/SPECS/
+      rpmbuild -ba nginx.spec -D 'debug_package %{nil}'
+      cp ~/rpmbuild/RPMS/noarch/* ~/rpmbuild/RPMS/x86_64/
+      cd ~/rpmbuild/RPMS/x86_64
+      yum localinstall -y *.rpm
+      systemctl start nginx
+      mkdir /usr/share/nginx/html/repo
+      cp ~/rpmbuild/RPMS/x86_64/*.rpm /usr/share/nginx/html/repo/
+      createrepo /usr/share/nginx/html/repo/
+      sed -i '/listen       80;/i\    autoindex on;' /etc/nginx/nginx.conf
+      sed -i '/listen       80;/i\    index index.html index.htm;' /etc/nginx/nginx.conf
+      nginx -s reload
+
+      SHELL
+
+    end
+  end
+end
