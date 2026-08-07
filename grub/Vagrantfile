@@ -1,0 +1,35 @@
+# -*- mode: ruby -*-
+# vim: set ft=ruby :
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro'
+MACHINES = {
+  :grub => {
+        :box_name => "bento/ubuntu-24.04",
+        :vm_name => "grub",
+  }
+}
+
+Vagrant.configure("2") do |config|
+
+  MACHINES.each do |boxname, boxconfig|
+
+    config.vm.define boxname do |box|
+   
+      box.vm.box = boxconfig[:box_name]
+      box.vm.host_name = boxconfig[:vm_name]
+      
+      box.vm.provider "virtualbox" do |v|
+        v.memory = 1024
+        v.cpus = 2
+
+       end
+
+      box.vm.provision "shell", privileged: true, inline: <<-SHELL
+      sed -i 's/GRUB_TIMEOUT=0/GRUB_TIMEOUT=10/' /etc/default/grub
+      update-grub
+      vgrename ubuntu-vg ubuntu-otus
+      sed -i 's/ubuntu--vg/ubuntu--otus/g' /boot/grub/grub.cfg
+      reboot
+      SHELL
+    end
+  end
+end
