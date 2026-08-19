@@ -1,0 +1,143 @@
+# -*- mode: ruby -*-
+# vim: set ft=ruby :
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro'
+MACHINES = {
+  :systemd => {
+        :box_name => "bento/ubuntu-24.04",
+        :vm_name => "systemd",
+  }
+}
+
+Vagrant.configure("2") do |config|
+
+  MACHINES.each do |boxname, boxconfig|
+
+    config.vm.define boxname do |box|
+
+      box.vm.box = boxconfig[:box_name]
+      box.vm.host_name = boxconfig[:vm_name]
+
+      box.vm.network "forwarded_port", guest: 8081, host: 8081
+      box.vm.network "forwarded_port", guest: 8082, host: 8082
+
+      box.vm.provider "virtualbox" do |v|
+        v.memory = 1024
+        v.cpus = 2
+
+       end
+
+      box.vm.provision "shell", privileged: true, inline: <<-SHELL
+
+        apt-get update
+        apt-get install -y spawn-fcgi php-cgi nginx curl
+
+
+        touch /var/log/watchlog.log
+        echo "test1" >> /var/log/watchlog.log
+        echo "test2" >> /var/log/watchlog.log
+
+        cat > /etc/default/watchlog << 'EOF'
+WORD="ALERT"
+LOG=/var/log/watchlog.log
+EOF
+
+        cat > /opt/watchlog.sh << 'EOF'
+#!/bin/bash
+WORD=$1
+LOG=$2
+
+if grep -q "$WORD" "$LOG"
+then
+    echo "Слово найдено!"
+fi
+EOF
+        chmod +x /opt/watchlog.sh
+
+        cat > /etc/systemd/system/watchlog.service << 'EOF'
+[Unit]
+Description=Watchlog check service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/watchlog
+ExecStart=/opt/watchlog.sh $WORD $LOG
+EOF
+
+        cat > /etc/systemd/system/watchlog.timer << 'EOF'
+[Unit]
+Description=Run watchlog every 30 seconds
+
+[Timer]
+Unit=watchlog.service
+OnActiveSec=0
+OnUnitActiveSec=30
+
+[Install]
+WantedBy=timers.target
+EOF
+
+
+
+        cat > /etc/default/spawn-fcgi << 'EOF'
+SERVER_IP=127.0.0.1
+SERVER_PORT=9000
+SERVER_USER=www-data
+SERVER_GROUP=www-data
+SERVER_CHILDS=5
+PIDFILE=/run/spawn-fcgi.pid
+EOF
+
+        cat > /etc/systemd/system/spawn-fcgi.service << 'EOF'
+[Unit]
+Description=spawn-fcgi service
+
+[Service]
+Type=forking
+EnvironmentFile=/etc/default/spawn-fcgi
+ExecStart=/usr/bin/spawn-fcgi -a $SERVER_IP -p $SERVER_PORT -u $SERVER_USER -g $SERVER_GROUP -P $PIDFILE -C $SERVER_CHILDS -f /usr/bin/php-cgi
+PIDFile=/run/spawn-fcgi.pid
+EOF
+
+
+        mkdir -p /var/www/first /var/www/second
+        echo "<h1>Это первый инстанс nginx</h1>" > /var/www/first/index.html
+        echo "<h1>Это второй инстанс nginx</h1>" > /var/www/second/index.html
+
+        cat > /etc/nginx/nginx-first.conf << 'EOF'
+pid /run/nginx-first.pid;
+events {}
+http {
+    server {
+        listen 8081;
+        root /var/www/first;
+    }
+}
+EOF
+
+        cat > /etc/nginx/nginx-second.conf << 'EOF'
+pid /run/nginx-second.pid;
+events {}
+http {
+    server {
+        listen 8082;
+        root /var/www/second;
+    }
+}
+EOF
+
+        cp /lib/systemd/system/nginx.service /etc/systemd/system/nginx@.service
+        sed -i "s#PIDFile=/run/nginx.pid#PIDFile=/run/nginx-%i.pid#" /etc/systemd/system/nginx@.service
+        sed -i "s#/usr/sbin/nginx -g#/usr/sbin/nginx -c /etc/nginx/nginx-%i.conf -g#g" /etc/systemd/system/nginx@.service
+        sed -i "s#--pidfile /run/nginx.pid#--pidfile /run/nginx-%i.pid#" /etc/systemd/system/nginx@.service
+        systemctl daemon-reload
+        systemctl enable --now watchlog.timer
+        systemctl enable --now spawn-fcgi.service
+        systemctl stop nginx.service
+        systemctl disable nginx.service
+        systemctl enable --now nginx@first.service
+        systemctl enable --now nginx@second.service
+
+      SHELL
+    end
+  end
+end
