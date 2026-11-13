@@ -1,0 +1,32 @@
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
+# Адаптировано под AlmaLinux 9 (оригинал был под centos/7)
+ENV['VAGRANT_SERVER_URL'] = 'https://vagrant.elab.pro'
+
+Vagrant.configure(2) do |config|
+  config.vm.box = "almalinux/9"
+
+  config.vm.provider "virtualbox" do |v|
+    v.memory = 1024
+  end
+
+  # Ansible ставим внутрь машины: на Windows-хосте он не запускается
+  config.vm.provision "shell", inline: "dnf install -y ansible-core"
+
+  config.vm.provision "ansible_local" do |ansible|
+    ansible.playbook = "provisioning/playbook.yml"
+    ansible.become = true
+    ansible.install = false
+    ansible.compatibility_mode = "2.0"
+  end
+
+  config.vm.define "ns01" do |ns01|
+    ns01.vm.network "private_network", ip: "192.168.50.10", virtualbox__intnet: "dns"
+    ns01.vm.hostname = "ns01"
+  end
+
+  config.vm.define "client" do |client|
+    client.vm.network "private_network", ip: "192.168.50.15", virtualbox__intnet: "dns"
+    client.vm.hostname = "client"
+  end
+end
